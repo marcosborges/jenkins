@@ -40,4 +40,7 @@ spec:
           periodSeconds: 60
           timeoutSeconds: 120
           successThreshold: 1
-          failureThreshold: 10 
+          failureThreshold: 10
+        env:
+        - name: TZ
+          value: "America/Sao_Paulo" 

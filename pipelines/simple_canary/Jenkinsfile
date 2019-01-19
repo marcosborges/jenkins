@@ -1,6 +1,6 @@
-@Grapes([
+@Grapes(
     @Grab(group='org.yaml', module='snakeyaml', version='1.23')
-])
+)
 
 import org.yaml.snakeyaml.Yaml as Snakeyaml
 import groovy.json.JsonSlurper
@@ -17,9 +17,9 @@ node {
     def gitRepository = "https://github.com/marcosborges/php-helloworld.git"
     def buildNumber = env.BUILD_NUMBER
     def workspace = pwd()
-    def clusterName = "teste"
-    def clusterRegion = ""
-    def gcloudProject = "teste_cloud"
+    def clusterName = "standard-cluster-1"
+    def clusterRegion = "southamerica-east1-a"
+    def gcloudProject = "marcosborges"
 
     stage('checkout') {
         git url: gitRepository, credentialsId : 'GIT_KEY'  
@@ -27,6 +27,7 @@ node {
     
     stage('build') {
         try{
+            get_template("Dockerfile")
             customImage = docker.build(
                 "gcr.io/${gcloudProject}/${applicationName}:${buildNumber}",
                 """ -f Dockerfile --network="host" . """
@@ -61,30 +62,47 @@ node {
     }
 
     stage('canary') {
-        
         for (def kind in ['hpa', 'service', 'ingress', 'deployment']) {
-            prepare_yaml_and_kubectl_apply(kind, applicationName, "canary")
+            prepare_yaml_and_kubectl_apply(workspace, kind, applicationName, "canary", buildNumber)
         } 
         
+        def canaryPOD
         try {
             sh "kubectl rollout status deployment/${applicationName}-canary"
+            canaryPOD = sh(script : """ kubectl get pods | grep ${applicationName}-canary """, returnStdout: true).tokenize(" ")[0]    
+            kube_log(canaryPOD)
         } catch(e) {
             error("Problemas ao implantar o canary")
-            def canaryPOD = sh(script : """ kubectl get pods | grep ${applicationName}-canary """, returnStdout: true).tokenize(" ")[0]    
+            canaryPOD = sh(script : """ kubectl get pods | grep ${applicationName}-canary """, returnStdout: true).tokenize(" ")[0]    
+            kube_log(canaryPOD)
             for (def describe in ["ingress ${applicationName}-canary", "service ${applicationName}-canary", "deployment ${applicationName}-canary", "pod ${canaryPOD}"]) {
                 kube_describe(describe)
             }
         }
         
-        kube_log(canaryPOD)
-        
-        input(id: 'Continuar', message: 'Proseguir para o estágio de stable?', parameters: [])
+        def keepToStabel = input(
+            message: 'Prosseguir para o estágio estável?', 
+            ok: 'Sim', 
+            parameters: [
+                booleanParam(
+                    defaultValue: true, 
+                    description: 'Caso você deseja prosseguir, aperte o botão SIM',
+                    name: 'Sim?'
+                )
+            ]
+        )
+
+        if(!keepToStabel){
+            for (def toDelete in ["hpa/${applicationName}-canary", "service/${applicationName}-canary", "ingress/${applicationName}-canary", "deployment/${applicationName}-canary"]){
+                kube_delete("${toDelete}")
+            }
+        }
     }
     
     stage('stable') {
         
         for (def kind in ['hpa', 'service', 'ingress', 'deployment']) {
-            prepare_yaml_and_kubectl_apply(kind, applicationName, "stable")
+            prepare_yaml_and_kubectl_apply(workspace, kind, applicationName, "stable", buildNumber)
         } 
         
         try {
@@ -99,21 +117,16 @@ node {
         
         kube_log(releasePOD)    
         
-        for (def deleteDefault in ["hpa/${applicationName}-canary", "service/${applicationName}-canary", "ingress/${applicationName}-canary", "deployment/${applicationName}-canary") {
-            kube_delete(deleteDefault)
+        for (def removeCanary in ["hpa/${applicationName}-canary", "service/${applicationName}-canary", "ingress/${applicationName}-canary", "deployment/${applicationName}-canary"]) {
+            kube_delete(removeCanary)
         }
     }
 }
 
-def get_k8s_template(filename) {
-    sh "wget https://github.com/marcosborges/jenkins/raw/simple_canary/${filename}"
-    return filename
-}
-
-def prepare_yaml_and_kubectl_apply (workspace, kind, applicationName, type) {
+def prepare_yaml_and_kubectl_apply (workspace, kind, applicationName, type, buildNumber) {
     def yaml = yaml_parse(
         file_read(
-            get_k8s_template("k8s_${kind}.yaml")
+            get_template("k8s_${kind}.yaml")
         )
     )
     yaml["metadata"]["name"] = "${applicationName}-${type}".toString()
@@ -167,12 +180,18 @@ def prepare_yaml_and_kubectl_apply (workspace, kind, applicationName, type) {
             } else {
                 yaml["spec"]["replicas"] = 2
             }
+            yaml["spec"]["template"]["spec"]["containers"][0]["env"].push(["name" : "APP_VERSION", "value" : buildNumber])
         break
     }
 
     def outputFilename = "${workspace}/k8s_${kind}_${type}.yaml"
-    file_write(outputFilename, yaml_stringify(yaml)
+    file_write(outputFilename, yaml_stringify(yaml))
     kube_apply(outputFilename)
+}
+
+def get_template(filename) {
+    sh "wget https://raw.githubusercontent.com/marcosborges/jenkins/master/pipelines/simple_canary/${filename}"
+    return filename
 }
 
 def yaml_parse (string) {
