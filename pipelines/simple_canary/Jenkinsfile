@@ -63,7 +63,7 @@ node {
 
     stage('canary') {
         for (def kind in ['hpa', 'service', 'ingress', 'deployment']) {
-            prepare_yaml_and_kubectl_apply(workspace, kind, applicationName, "canary", buildNumber)
+            prepare_yaml_and_kubectl_apply(workspace, kind, applicationName, "canary", buildNumber,  "gcr.io/${gcloudProject}/${applicationName}:${buildNumber}")
         } 
         
         def canaryPOD
@@ -123,10 +123,10 @@ node {
     }
 }
 
-def prepare_yaml_and_kubectl_apply (workspace, kind, applicationName, type, buildNumber) {
+def prepare_yaml_and_kubectl_apply (workspace, kind, applicationName, type, buildNumber, image) {
     def yaml = yaml_parse(
         file_read(
-            get_template("k8s_${kind}.yaml")
+            "${workspace}/" + get_template("k8s_${kind}.yaml")
         )
     )
     yaml["metadata"]["name"] = "${applicationName}-${type}".toString()
@@ -155,14 +155,16 @@ def prepare_yaml_and_kubectl_apply (workspace, kind, applicationName, type, buil
             }
         break
         case "ingress":
-            ingressYaml["spec"]["rules"] = [
+            yaml["spec"] = [ "rules" : 
                 [
-                    "host" : "${yaml['metadata']['name']}.localhost".toString(),
-                    "http" : [
-                        "paths" : [
-                            [ 
-                                "backend" : ["serviceName" : yaml["metadata"]["name"],"servicePort" : 80],
-                                "path" : "/"
+                    [
+                        "host" : "${yaml['metadata']['name']}.localhost".toString(),
+                        "http" : [
+                            "paths" : [
+                                [ 
+                                    "backend" : ["serviceName" : yaml["metadata"]["name"],"servicePort" : 80],
+                                    "path" : "/"
+                                ]
                             ]
                         ]
                     ]
@@ -174,7 +176,7 @@ def prepare_yaml_and_kubectl_apply (workspace, kind, applicationName, type, buil
             yaml["spec"]["template"]["metadata"]["name"] = yaml["metadata"]["name"]
             yaml["spec"]["template"]["metadata"]["labels"] = labels
             yaml["spec"]["template"]["spec"]["containers"][0]["name"] = yaml["metadata"]["name"]
-            yaml["spec"]["template"]["spec"]["containers"][0]["image"] = image
+            yaml["spec"]["template"]["spec"]["containers"][0]["image"] = image.toString()
             if (type == "canary") {
                 yaml["spec"]["replicas"] = 1
             } else {
@@ -229,17 +231,17 @@ def file_delete(filename){
 }
 
 def kube_apply(file){
-    try { sh "kubectl apply -f ${file}" } catch (ex) { println e.getMessage() }
+    try { sh "kubectl apply -f ${file}" } catch (ex) { println ex.getMessage() }
 }
 
 def kube_describe(describe){
-    try { sh "kubectl describe ${describe}" } catch (ex) { println e.getMessage() }
+    try { sh "kubectl describe ${describe}" } catch (ex) { println ex.getMessage() }
 }
 
 def kube_log(POD){
-    try { sh "kubectl logs ${POD}" } catch (ex) { println e.getMessage() }
+    try { sh "kubectl logs ${POD}" } catch (ex) { println ex.getMessage() }
 }
 
 def kube_delete(delete){
-    try { sh "kubectl delete ${delete}" } catch (ex) { println e.getMessage() }
+    try { sh "kubectl delete ${delete}" } catch (ex) { println ex.getMessage() }
 }
