@@ -116,7 +116,7 @@ node {
             parameters: []
         )
 
-        for (def removeCanary in ["hpa/${applicationName}-canary", "service/${applicationName}-canary", "ingress/${applicationName}-canary", "deployment/${applicationName}-canary"]) {
+        for (def removeCanary in ["hpa/${applicationName}-canary", "service/${applicationName}-canary", "deployment/${applicationName}-canary"]) {
             kube_delete(removeCanary)
         }
     }
