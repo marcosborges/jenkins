@@ -20,6 +20,9 @@ node {
     def clusterName = "standard-cluster-1"
     def clusterRegion = "southamerica-east1-a"
     def gcloudProject = "marcosborges"
+   
+    deleteDir()
+
 
     stage('checkout') {
         git url: gitRepository, credentialsId : 'GIT_KEY'  
@@ -80,43 +83,39 @@ node {
             }
         }
         
-        def keepToStabel = input(
-            message: 'Prosseguir para o estágio estável?', 
-            ok: 'Sim', 
-            parameters: [
-                booleanParam(
-                    defaultValue: true, 
-                    description: 'Caso você deseja prosseguir, aperte o botão SIM',
-                    name: 'Sim?'
-                )
-            ]
+        input(
+            message: 'Estágio estável', 
+            ok: 'Continuar para o estagio estável', 
+            parameters: []
         )
-
-        if(!keepToStabel){
-            for (def toDelete in ["hpa/${applicationName}-canary", "service/${applicationName}-canary", "ingress/${applicationName}-canary", "deployment/${applicationName}-canary"]){
-                kube_delete("${toDelete}")
-            }
-        }
     }
     
     stage('stable') {
         
         for (def kind in ['hpa', 'service', 'ingress', 'deployment']) {
-            prepare_yaml_and_kubectl_apply(workspace, kind, applicationName, "stable", buildNumber)
+            prepare_yaml_and_kubectl_apply(workspace, kind, applicationName, "stable", buildNumber, "gcr.io/${gcloudProject}/${applicationName}:${buildNumber}")
         } 
         
+        def stablePOD
         try {
             sh "kubectl rollout status deployment/${applicationName}-stable"
+            stablePOD = sh(script : """ kubectl get pods | grep ${applicationName}-stable """, returnStdout: true).tokenize(" ")[0]    
+            kube_log(stablePOD)    
         } catch(e) {
             error("Problemas ao implantar o release")
-            def releasePOD = sh(script : """ kubectl get pods | grep ${applicationName}-stable """, returnStdout: true).tokenize(" ")[0]    
+            stablePOD = sh(script : """ kubectl get pods | grep ${applicationName}-stable """, returnStdout: true).tokenize(" ")[0]    
+            kube_log(stablePOD)    
             for (def describe in ["ingress ${applicationName}-stable", "service ${applicationName}-stable", "deployment ${applicationName}-stable", "pod ${releasePOD}"]) {
                 kube_describe(describe)
             }
         }
         
-        kube_log(releasePOD)    
-        
+        input(
+            message: 'Remover canário', 
+            ok: 'Confirmar a remoção do canário?', 
+            parameters: []
+        )
+
         for (def removeCanary in ["hpa/${applicationName}-canary", "service/${applicationName}-canary", "ingress/${applicationName}-canary", "deployment/${applicationName}-canary"]) {
             kube_delete(removeCanary)
         }
@@ -158,12 +157,12 @@ def prepare_yaml_and_kubectl_apply (workspace, kind, applicationName, type, buil
             yaml["spec"] = [ "rules" : 
                 [
                     [
-                        "host" : "${yaml['metadata']['name']}.localhost".toString(),
+                        "host" : "${yaml['metadata']['name']}.mkmtecnologia.com.br".toString(),
                         "http" : [
                             "paths" : [
                                 [ 
                                     "backend" : ["serviceName" : yaml["metadata"]["name"],"servicePort" : 80],
-                                    "path" : "/"
+                                    "path" : "/*"
                                 ]
                             ]
                         ]
